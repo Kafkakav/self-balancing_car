@@ -167,8 +167,3 @@ u8 MPU_Get_Accelerometer(short *ax,short *ay,short *az)
     return res;;
 }
  
-
-
-
-
-

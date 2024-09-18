@@ -30,7 +30,7 @@ extern int Encoder_A,Encoder_B;
 
 extern float Car_Angle_Balance,Angle_Balance,Gyro_Balance,Gyro_Turn; //平衡傾角 平衡陀螺儀 轉向陀螺儀
 u8 Flag_Qian,Flag_Hou,Flag_Left,Flag_Right,Flag_sudu=2; //藍芽遙控相關的變數
-unsigned char RX_Buf[32];
+//unsigned char RX_Buf[32];
 
 /**
   * @brief  主函式

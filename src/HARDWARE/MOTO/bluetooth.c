@@ -70,8 +70,8 @@ void Bluetooth_Init(u32 bound)
 //藍芽發送到手機
 void USART2_Send(unsigned char *tx_buf, int len)
 {
-		USART_ClearFlag(USART2, USART_FLAG_TC);
-		USART_ClearITPendingBit(USART2, USART_FLAG_TXE);
+	USART_ClearFlag(USART2, USART_FLAG_TC);
+	USART_ClearITPendingBit(USART2, USART_FLAG_TXE);
 	while(len--)
 	{
 		USART_SendData(USART2, *tx_buf);
@@ -93,31 +93,79 @@ void USART2_Receive(unsigned char *rx_buf, int len)
 
 
 //串列埠2中斷函式
+#define UART_BUFMAX 64
+u8 uart_rxbuf[UART_BUFMAX];
+u8 uart_rxlen= 0;
 void USART2_IRQHandler(void)
 {
-	static	u8 uart_receive=0;//藍芽接收相關變數
+	u8 uart_receive=0;//藍芽接收相關變數
 	//u8 Res;
-	if(USART_GetITStatus(USART2, USART_IT_RXNE) != RESET)  //接收中斷(接收到的數據必須是0x0d 0x0a結尾)
+    
+	//printf("IRQ:%u\n", USART_GetITStatus(USART2, USART_IT_RXNE));
+	// when enable USART_IT_RXNE,  USART_FLAG_ORE will be enable
+	if(USART_GetITStatus(USART2, USART_IT_RXNE) != RESET || 
+		USART_GetFlagStatus(USART2, USART_FLAG_ORE) != RESET)  //接收中斷(接收到的數據必須是0x0d 0x0a結尾)
 	{
-		
 		uart_receive = USART_ReceiveData(USART2);
-		//前後左右
-		if(uart_receive=='Z' || uart_receive==0x00)	Flag_Qian=0,Flag_Hou=0,Flag_Left=0,Flag_Right=0;//////////////剎車
-		else if(uart_receive=='W' || uart_receive==0x01)	Flag_Qian=1,Flag_Hou=0,Flag_Left=0,Flag_Right=0;//////////////前
-		else if(uart_receive=='S' || uart_receive==0x05)	Flag_Qian=0,Flag_Hou=1,Flag_Left=0,Flag_Right=0;//////////////后
-		else if(uart_receive=='A' || uart_receive==0x02||uart_receive==0x03||uart_receive==0x04)	
-				Flag_Qian=0,Flag_Hou=0,Flag_Left=0,Flag_Right=1;  //左
-		else if(uart_receive=='D' || uart_receive==0x06||uart_receive==0x07||uart_receive==0x08)	    //右
-				Flag_Qian=0,Flag_Hou=0,Flag_Left=1,Flag_Right=0;
-		else Flag_Qian=0,Flag_Hou=0,Flag_Left=0,Flag_Right=0;		//////////////剎車
-
+		//printf("COM:0x%x [%c]\n", uart_receive, (char)uart_receive);
+		if(uart_receive == 'Z') {
+			printf("JOY:Z\n");
+			Flag_Qian=0,Flag_Hou=0,Flag_Left=0,Flag_Right=0;
+			uart_rxlen = 0;
+		}
+		else if(uart_receive == '\r' || uart_receive == '\n') {
+			uart_rxbuf[uart_rxlen] = 0;
+			//printf("JOY:[%s]\n", (char *)uart_rxbuf);
+			if(uart_rxlen > 0) {
+				printf("JOY:[%s]\n", (char *)uart_rxbuf);
+				//前後左右
+				Flag_Qian=0,Flag_Hou=0,Flag_Left=0,Flag_Right=0; 
+				#if 0
+				if(uart_rxbuf[0] == 'Z') //剎車 Z
+					Flag_Qian = 0;
+				else if(uart_rxbuf[0] == 'W') //前 W
+					Flag_Qian = 1; 
+				else if(uart_rxbuf[0] == 'S') //後 S
+					Flag_Hou = 1;
+				else if(uart_rxbuf[0] == 'A') //左 A
+					Flag_Left = 1;
+				else if(uart_rxbuf[0] == 'D') //右 D
+					Flag_Right = 1;
+				#else // 設定左右反向
+				if(uart_rxbuf[0] == 'Z') //剎車 Z
+					Flag_Qian = 0;
+				else if(uart_rxbuf[0] == 'W') //前 W
+					Flag_Qian = 1;
+				else if(uart_rxbuf[0] == 'S') //後 S
+					Flag_Hou = 1;
+				else if(uart_rxbuf[0] == 'A') //左 A
+					Flag_Right = 1;
+				else if(uart_rxbuf[0] == 'D') //右 D
+					Flag_Left = 1;
+				#endif
+			}
+			uart_rxlen = 0;
+		}
+        else {
+			uart_rxbuf[uart_rxlen++] = uart_receive;
+			if(uart_rxlen >= UART_BUFMAX) //buffer ovwerflow, reset
+				uart_rxlen = 0;
+		}
 //		if(rx2_length > rx2_count)
 //		{
 //			*rx2_address = Res;
 //			rx2_address++;
 //			rx2_count++;	
-//	}
-			USART_ClearITPendingBit(USART2, USART_IT_RXNE);
-			 
-    } 	
+//		}
+		USART_ClearITPendingBit(USART2, USART_IT_RXNE);
+    }
+	else {
+		//注意！不能使用if(USART_GetITStatus(USART2, USART_IT_RXNE) != RESET)来判断
+      	if (USART_GetFlagStatus(USART2, USART_FLAG_ORE) != RESET) {
+ 			uart_receive = USART_ReceiveData(USART2);
+			printf("ORE:0x%x\n",uart_receive);
+		}
+
+	}
+
 }

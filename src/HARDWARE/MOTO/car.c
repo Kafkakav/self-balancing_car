@@ -6,7 +6,8 @@
 
 int Timer_100ms=0;//100ms時間片
 int Timer_1S;//1s時間片
-char Balance[4];
+int Timer_CarInfo2S=0;
+char BalanceStr[64];
 u8 Encoder_Timer = 0;
 
 u8 OLED_ADC_Flag=0;
@@ -35,7 +36,6 @@ int Balance_Pwm;     //平衡pwm
 int Velocity_Pwm;    //速度pwm
 int Turn_Pwm;        //轉向pwm
 
-
 /********************************************
 以下是平衡小車的PID參數除錯整定
 安裝好MPU6050 測量平衡車的角度和角速度，只需測量Y軸和水平面的角度，和X軸的角速度即可。
@@ -55,18 +55,23 @@ float Velocity_Kp = 120.00;         //速度環PID 的P值
 float Velocity_Ki = 0.6;         //速度環PID 的I值 = P/200;
 //第四步，除錯轉向環PID，需要在函式中調節
 
-
+int RPM_A=0, RPM_B=0;
+int get_rpm(int encoder) {
+	//reads/10ms => 6000 times/minute;
+	return encoder*3.896; // 1540=11*4*35, rpm = encoder * 6000/1540
+}
 
 //利用MPU6050產生5ms中斷，中斷進入后開始做小車的控制及PID演算法
 void EXTI2_IRQHandler(void)
 {
-	if(EXTI_GetITStatus(EXTI_Line2) != RESET)   //時間到了
+	if(EXTI_GetITStatus(EXTI_Line2) != RESET)   //時間到了: 10ms
 	{
 		EXTI_ClearITPendingBit(EXTI_Line2); // 清除中斷標誌位
-		LED_Flash(50);//250ms閃爍一次
+		LED_Flash(50); //500ms ////250ms閃爍一次
 				
 		Timer_100ms++;
 		Timer_1S++;
+		Timer_CarInfo2S++;
 		Encoder_A = -Read_Encoder(2);              //===讀取編碼器的值，因為兩個電機的旋轉了180度的，所以對其中一個取反，保證輸出極性一致
 		Encoder_B = Read_Encoder(3);               //===讀取編碼器的值
 		Car_Read_Angle();//獲取小車的平衡角度
@@ -77,13 +82,12 @@ void EXTI2_IRQHandler(void)
 		Turn_Pwm =Car_Turn(Encoder_A,Encoder_B,Gyro_Turn);        //===轉向環PID控制
 		else Turn_Pwm=-0.4*Gyro_Turn;
 
-		
 		PWMA = Balance_Pwm + Velocity_Pwm + Turn_Pwm;
 		PWMB = Balance_Pwm + Velocity_Pwm - Turn_Pwm;
 		
-		Set_Pwm(PWMA,PWMB);//pwm更新
+		Set_Pwm(PWMA,PWMB); //pwm更新
 
-		if(Timer_1S >= 200)//1S 更新一次ADC
+		if(Timer_1S >= 200) //2S ////1S 更新一次ADC
 		{
 			Timer_1S=0;
 			ADC_BAT_Val = Get_BAT_ADC();//電壓值採集
@@ -95,21 +99,38 @@ void EXTI2_IRQHandler(void)
 			if(adc11<10.1) {
 			  OLED_ShowString(0,0,"Low Power",12);//如果電池低於7.4V，提示低電壓，需要充電
 			}
-
+    
 			//計算系統電壓
 			adc22=ADC_SYS_Val*3.3/4096*2;
 			sprintf(adc2,"%2.1f",adc22);
 			OLED_ShowString(96,0, adc2,12);  //OLED顯示電池電壓
+
 		}
-		
-		if(Timer_100ms >= 10)//50ms 更新一次角度
+		else if(Timer_CarInfo2S >= 250) { //2.5s
+			//車輪周長=21.35, 直流電機一周輸出11 pulse, 減數齒輪1:35 =>一周 11 35 = 385 pulse, 67283, 周長: 21.35
+			Timer_CarInfo2S = 0;
+
+			snprintf(BalanceStr, sizeof(BalanceStr), "[%d,%d,%d]", 
+				(int)(Car_Angle_Balance*10), RPM_A, RPM_B);
+
+			OLED_ShowString(0,5,BalanceStr, 12);  //OLED顯示角度
+			USART2_Send(BalanceStr, strlen(BalanceStr));
+			USART2_Send("\n",  1);
+		}
+
+		if(Timer_100ms >= 10) //100ms //x50ms 更新一次角度
 		{
 			Timer_100ms=0;
-			OLED_ShowNum(16,1,Encoder_A,5,12);
-			OLED_ShowNum(16,2,Encoder_B,5,12);
-			sprintf(Balance,"%2.1f",Car_Angle_Balance);
-			OLED_ShowString(48,3, Balance,12);  //OLED顯示角度
+			RPM_A = get_rpm(Encoder_A);
+			RPM_B = get_rpm(Encoder_B);
+			sprintf(BalanceStr,"%4d", RPM_A); OLED_ShowString(16,1,BalanceStr, 12);
+			sprintf(BalanceStr,"%4d", RPM_B); OLED_ShowString(16,2,BalanceStr, 12);
+			//OLED_ShowNum(16,1,Encoder_A,5,12);
+			//OLED_ShowNum(16,2,Encoder_B,5,12);
 
+			sprintf(BalanceStr,"%4d", (int)(Car_Angle_Balance*10));  // %f not working
+			OLED_ShowString(48,3,BalanceStr, 12);  //OLED顯示角度
+            
 		}
 
 	}
@@ -128,31 +149,34 @@ void EXTI2_IRQHandler(void)
 *********************************************/
 void Car_Read_Angle(void)
 {
-	float Accel_Y,Accel_Z,Gyro_X,Gyro_Z;
+	float Accel_X,Accel_Y,Accel_Z,Gyro_X,Gyro_Z;
 	
 	MPU_Get_Gyroscope(&Gryo[0],&Gryo[1],&Gryo[2]);      //獲取角速度
 	MPU_Get_Accelerometer(&Acce[0],&Acce[1],&Acce[2]);  //獲取加速度
 	
 	Gyro_X=(float)Gryo[0];    //X軸加速度原始
 	Gyro_Z=(float)Gryo[2];		//Z軸加速度原始
+	Accel_X = (float)Acce[0];
 	Accel_Y=(float)Acce[1];		//Y軸角速度原始
-	Accel_Z=(float)Acce[2];		//X軸角速度原始
+	Accel_Z=(float)Acce[2];		//Z軸角速度原始
 	
 	if(Gyro_X>32768)  Gyro_X-=65536;     //數據型別轉換  也可通過short強制型別轉換
 	if(Gyro_Z>32768)  Gyro_Z-=65536;     //數據型別轉換
 	if(Accel_Y>32768) Accel_Y-=65536;    //數據型別轉換
 	if(Accel_Z>32768) Accel_Z-=65536;    //數據型別轉換
+	if(Accel_X>32768) Accel_X-=65536;
 	
 	Gyro_Balance=Gyro_X;                                  	//更新平衡角速度
 	Gyro_Turn=Gyro_Z;                                       //更新轉向角速度
 	
 	//加速度轉傾角
 	//量程為±2g時，靈敏度：16384 LSB/g
-	Angle_Balance=atan2(Accel_Y,Accel_Z)*180/PI;            //計算小車傾角
+	//Angle_Balance=atan2(Accel_Y,Accel_Z)*180/PI;         // 計算小車傾角:
+	Angle_Balance=atan2(Accel_Y,Accel_Z)*57.297;            // 180/PI = 57.297
 	//角速度
-	//範圍為2000deg/s時，換算關係：16.4 LSB/(deg/s)
-	Car_Gyro_Balance=Gyro_X/16.4;                          //陀螺儀量程轉換-角速度
-	Kalman_Filter(Angle_Balance,Car_Gyro_Balance);				 //卡爾曼濾波
+	//範圍為2000deg/s時，換算關係：16.4 LSB/(deg/s) 
+	Car_Gyro_Balance=Gyro_X/16.4;                          //陀螺儀量程轉換-角速度, short(32768) / 2000 = 16.384
+	Kalman_Filter(Angle_Balance,Car_Gyro_Balance);			//卡爾曼濾波
 	Car_Angle_Balance=angle;                               //更新平衡傾角卡爾曼濾波后,融合后的角度需要和角速度方向一致		
 
 }
@@ -185,8 +209,8 @@ int Car_Velocity(int encoder_left,int encoder_right)
 	static float Velocity,Encoder_Least,Encoder,Movement;
 	static float Encoder_Integral,Target_Velocity;
 	//=============遙控前進後退部分=======================// 
-	                         Target_Velocity=50;                 
-	if(1==Flag_Qian)    	Movement=Target_Velocity;	         //===前進標誌位置1 
+	                        Target_Velocity=50;                 
+	if(1==Flag_Qian)    	Movement=Target_Velocity;	       //===前進標誌位置1 
 	else if(1==Flag_Hou)	Movement=-Target_Velocity;         //===後退標誌位置1
 	else  Movement=0;	
 	 
@@ -216,22 +240,23 @@ int Car_Turn(int encoder_a,int encoder_b,float gyro)//轉向控制
 	//=============遙控左右旋轉部分=======================//
 	//這一部分主要是根據旋轉前的速度調整速度的起始速度，增加小車的適應性
   	if(1==Flag_Left||1==Flag_Right)                      
-		{
-			if(++Turn_Count==1)
+	{
+		if(++Turn_Count==1)
 			Encoder_temp=myabs(encoder_a+encoder_b);      
-			Turn_Convert=55/Encoder_temp;
-			if(Turn_Convert<0.6)Turn_Convert=0.6;
-			if(Turn_Convert>3)Turn_Convert=3;
-		}	
-	  else
-		{
-			Turn_Convert=10;
-			Turn_Count=0;
-			Encoder_temp=0;
-		}			
-		if(1==Flag_Left)	           Turn_Target+=Turn_Convert;
-		else if(1==Flag_Right)	     Turn_Target-=Turn_Convert; 
-		else Turn_Target=0;
+		Turn_Convert=55/Encoder_temp;
+		if(Turn_Convert<0.6)Turn_Convert=0.6;
+		if(Turn_Convert>3)Turn_Convert=3;
+	}	
+	else
+	{
+		Turn_Convert=10;
+		Turn_Count=0;
+		Encoder_temp=0;
+	}			
+	if(1==Flag_Left)	         Turn_Target+=Turn_Convert;
+	else if(1==Flag_Right)	     Turn_Target-=Turn_Convert; 
+	else Turn_Target=0;
+
 	if(Turn_Target>Turn_Amplitude)  Turn_Target=Turn_Amplitude;    //===轉向	速度限幅
 	if(Turn_Target<-Turn_Amplitude) Turn_Target=-Turn_Amplitude;
 	if(Flag_Qian==1||Flag_Hou==1)  Kd=0.5;        
@@ -265,9 +290,4 @@ void Set_Pwm(int motoA,int motoB)
 	else{BIN1(0);BIN2(1);}
 	TIM4->CCR4=myabs(motoB);	
 }
-
-
-
-
-
 
